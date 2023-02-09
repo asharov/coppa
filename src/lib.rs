@@ -4,6 +4,21 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Selfishness {
+    Altruistic,
+    Selfish,
+    Freerider,
+}
+
+#[derive(Debug)]
+pub struct Config {
+    number_chunks: usize,
+    number_peers: usize,
+    number_seeds: usize,
+    peer_selfishness: Vec<Selfishness>,
+}
+
 #[derive(Debug)]
 pub struct Chunk {
     pub completion_round: Option<usize>,
@@ -17,6 +32,7 @@ pub struct File {
 
 #[derive(Debug)]
 pub struct Peer {
+    pub selfishness: Selfishness,
     pub completion_round: Option<usize>,
     pub possessed_chunks: Vec<bool>,
     pub number_uploads: usize,
@@ -52,6 +68,31 @@ pub struct EmptyRunObserver;
 pub struct DebugRunObserver;
 pub struct SummaryRunObserver;
 
+impl Config {
+    pub fn from_counts(
+        number_chunks: usize,
+        number_peers: usize,
+        number_seeds: usize,
+        number_selfish: usize,
+        number_freeriders: usize,
+    ) -> Config {
+        assert!(number_chunks > 0);
+        assert!(number_seeds > 0);
+        assert!(number_peers > number_seeds);
+        assert!(number_seeds + number_selfish + number_freeriders <= number_peers);
+        let mut peers =
+            vec![Selfishness::Altruistic; number_peers - number_selfish - number_freeriders];
+        peers.extend(vec![Selfishness::Selfish; number_selfish]);
+        peers.extend(vec![Selfishness::Freerider; number_freeriders]);
+        Config {
+            number_chunks,
+            number_peers,
+            number_seeds,
+            peer_selfishness: peers,
+        }
+    }
+}
+
 impl Chunk {
     pub fn new(number_seeds: usize) -> Chunk {
         Chunk {
@@ -62,8 +103,10 @@ impl Chunk {
 }
 
 impl Peer {
-    pub fn new(file: &File, is_seed: bool) -> Peer {
+    pub fn new(file: &File, is_seed: bool, selfishness: Selfishness) -> Peer {
+        assert!(!is_seed || selfishness == Selfishness::Altruistic);
         Peer {
+            selfishness: selfishness,
             completion_round: if is_seed { Some(0) } else { None },
             possessed_chunks: vec![is_seed; file.chunks.len()],
             number_uploads: 0,
@@ -73,33 +116,31 @@ impl Peer {
     }
 
     fn can_transfer_chunk(&self, chunk_number: usize) -> bool {
-        self.possessed_chunks[chunk_number]
-            && self.current_target_peer.is_none()
-            && self.pending_chunk.map_or(true, |c| c != chunk_number)
+        let allows_download = self.selfishness == Selfishness::Altruistic || (self.selfishness == Selfishness::Selfish && self.completion_round.is_none());
+        let has_chunk = self.possessed_chunks[chunk_number] && self.pending_chunk.map_or(true, |c| c != chunk_number);
+        let has_capacity = self.current_target_peer.is_none();
+        allows_download && has_chunk && has_capacity
     }
 }
 
 impl Distribution {
-    pub fn new(number_chunks: usize, number_seeds: usize, number_peers: usize) -> Distribution {
-        assert!(number_chunks > 0);
-        assert!(number_seeds > 0);
-        assert!(number_peers > number_seeds);
-        let mut chunks = Vec::with_capacity(number_chunks);
-        for _ in 0..number_chunks {
-            chunks.push(Chunk::new(number_seeds))
+    pub fn new(config: &Config) -> Distribution {
+        let mut chunks = Vec::with_capacity(config.number_chunks);
+        for _ in 0..config.number_chunks {
+            chunks.push(Chunk::new(config.number_seeds))
         }
         let file = File { chunks };
-        let mut peers = Vec::with_capacity(number_peers);
-        for _ in 0..number_seeds {
-            peers.push(Peer::new(&file, true))
+        let mut peers = Vec::with_capacity(config.number_peers);
+        for i in 0..config.number_seeds {
+            peers.push(Peer::new(&file, true, config.peer_selfishness[i]))
         }
-        for _ in number_seeds..number_peers {
-            peers.push(Peer::new(&file, false))
+        for i in config.number_seeds..config.number_peers {
+            peers.push(Peer::new(&file, false, config.peer_selfishness[i]))
         }
         Distribution {
             file: file,
             peers: peers,
-            number_seeds: number_seeds,
+            number_seeds: config.number_seeds,
         }
     }
 
@@ -152,6 +193,7 @@ impl Distribution {
                             chunk.completion_round = Some(rounds.len());
                             completed_chunks += 1;
                         }
+                        self.peers[source_peer_index].number_uploads += 1;
                         self.peers[source_peer_index].current_target_peer = Some(*peer_index);
                         self.peers[*peer_index].pending_chunk = Some(*chunk_index);
                         self.peers[*peer_index].possessed_chunks[*chunk_index] = true;
