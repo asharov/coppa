@@ -1,4 +1,6 @@
 use chrono::Utc;
+use clap::ValueEnum;
+use rand::Rng;
 use rand::seq::SliceRandom;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -11,12 +13,20 @@ pub enum Selfishness {
     Freerider,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Strategy {
+    RarestFirst,
+    MostCommonFirst,
+    Uniform,
+}
+
 #[derive(Debug)]
 pub struct Config {
     number_chunks: usize,
     number_peers: usize,
     number_seeds: usize,
     peer_selfishness: Vec<Selfishness>,
+    peer_strategies: Vec<Strategy>,
 }
 
 #[derive(Debug)]
@@ -33,6 +43,7 @@ pub struct File {
 #[derive(Debug)]
 pub struct Peer {
     pub selfishness: Selfishness,
+    pub strategy: Strategy,
     pub completion_round: Option<usize>,
     pub possessed_chunks: Vec<bool>,
     pub number_uploads: usize,
@@ -75,20 +86,22 @@ impl Config {
         number_seeds: usize,
         number_selfish: usize,
         number_freeriders: usize,
+        strategy: Strategy,
     ) -> Config {
         assert!(number_chunks > 0);
         assert!(number_seeds > 0);
         assert!(number_peers > number_seeds);
         assert!(number_seeds + number_selfish + number_freeriders <= number_peers);
-        let mut peers =
+        let mut selfishness =
             vec![Selfishness::Altruistic; number_peers - number_selfish - number_freeriders];
-        peers.extend(vec![Selfishness::Selfish; number_selfish]);
-        peers.extend(vec![Selfishness::Freerider; number_freeriders]);
+        selfishness.extend(vec![Selfishness::Selfish; number_selfish]);
+        selfishness.extend(vec![Selfishness::Freerider; number_freeriders]);
         Config {
             number_chunks,
             number_peers,
             number_seeds,
-            peer_selfishness: peers,
+            peer_selfishness: selfishness,
+            peer_strategies: vec![strategy; number_peers],
         }
     }
 }
@@ -103,10 +116,11 @@ impl Chunk {
 }
 
 impl Peer {
-    pub fn new(file: &File, is_seed: bool, selfishness: Selfishness) -> Peer {
+    pub fn new(file: &File, is_seed: bool, selfishness: Selfishness, strategy: Strategy) -> Peer {
         assert!(!is_seed || selfishness == Selfishness::Altruistic);
         Peer {
-            selfishness: selfishness,
+            selfishness,
+            strategy,
             completion_round: if is_seed { Some(0) } else { None },
             possessed_chunks: vec![is_seed; file.chunks.len()],
             number_uploads: 0,
@@ -132,10 +146,10 @@ impl Distribution {
         let file = File { chunks };
         let mut peers = Vec::with_capacity(config.number_peers);
         for i in 0..config.number_seeds {
-            peers.push(Peer::new(&file, true, config.peer_selfishness[i]))
+            peers.push(Peer::new(&file, true, config.peer_selfishness[i], config.peer_strategies[i]))
         }
         for i in config.number_seeds..config.number_peers {
-            peers.push(Peer::new(&file, false, config.peer_selfishness[i]))
+            peers.push(Peer::new(&file, false, config.peer_selfishness[i], config.peer_strategies[i]))
         }
         Distribution {
             file: file,
@@ -167,13 +181,18 @@ impl Distribution {
             let mut completed_chunks = 0;
             shuffled_peers[0..self.number_seeds].shuffle(&mut rng);
             shuffled_peers[self.number_seeds..].shuffle(&mut rng);
-            temporary_chunks.sort_unstable_by_key(|c| self.file.chunks[*c].number_possessing_peers);
+            temporary_chunks.sort_by_key(|c| self.file.chunks[*c].number_possessing_peers);
             for peer_index in &shuffled_peers[self.number_seeds..number_peers] {
                 if self.peers[*peer_index].completion_round.is_some() {
                     continue;
                 }
-                temporary_chunks.shuffle(&mut rng);
-                'chunk_search: for chunk_index in &temporary_chunks {
+                self.randomize_chunks(&mut rng, &mut temporary_chunks);
+                let peer_chunks: Box<dyn Iterator<Item = &usize>> = match self.peers[*peer_index].strategy {
+                    Strategy::RarestFirst => Box::new(temporary_chunks.iter()),
+                    Strategy::MostCommonFirst => Box::new(temporary_chunks.iter().rev()),
+                    Strategy::Uniform => Box::new(temporary_chunks.choose_multiple(&mut rng, temporary_chunks.len())),
+                };
+                'chunk_search: for chunk_index in peer_chunks {
                     if self.peers[*peer_index].possessed_chunks[*chunk_index] {
                         continue;
                     }
@@ -219,6 +238,24 @@ impl Distribution {
             current_round = Round::new(&current_round);
         }
         rounds
+    }
+
+    fn randomize_chunks<R: Rng + ?Sized>(&self, rng: &mut R, chunks: &mut Vec<usize>) {
+        let mut i = 0;
+        while i < chunks.len() - 1 {
+            let chunk = &self.file.chunks[chunks[i]];
+            let next_chunk = &self.file.chunks[chunks[i + 1]];
+            if chunk.number_possessing_peers != next_chunk.number_possessing_peers {
+                i += 1
+            } else {
+                let mut j = i + 2;
+                while j < chunks.len() && self.file.chunks[chunks[j]].number_possessing_peers == chunk.number_possessing_peers {
+                    j += 1
+                }
+                chunks[i..j].shuffle(rng);
+                i = j;
+            }
+        }
     }
 }
 
