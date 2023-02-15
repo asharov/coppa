@@ -1,8 +1,9 @@
 use clap::Parser;
-use coppa::Config;
 use coppa::Distribution;
 use coppa::Strategy;
-use coppa::{EmptyRunObserver,SummaryRunObserver,DebugRunObserver};
+use coppa::{Config, PeerConfig};
+use coppa::{DebugRunObserver, EmptyRunObserver, SummaryRunObserver};
+use std::fs;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -25,20 +26,51 @@ struct Cli {
     /// Chunk selection strategy that all peers use
     #[arg(long, value_enum, default_value_t = Strategy::RarestFirst)]
     strategy: Strategy,
+    /// File containing peer configuration, one peer per line
+    #[arg(short = 'F', long)]
+    peer_config_file: Option<String>,
     /// Seed to use for random number generation
     #[arg(long)]
     random_seed: Option<u64>,
     /// Do not print any progress reports
-    #[arg(short='S', long)]
+    #[arg(short = 'S', long)]
     silent: bool,
     /// Print verbose progress reports
-    #[arg(short='V', long)]
+    #[arg(short = 'V', long)]
     verbose: bool,
+}
+
+impl Cli {
+    pub fn assert_consistency(&self) {
+        if self.peer_config_file.is_some() {
+            assert!(self.selfish == 0);
+            assert!(self.freerider == 0);
+            assert!(self.strategy == Strategy::RarestFirst);
+        }
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
-    let config = Config::from_counts(cli.chunks, cli.peers, cli.seeds, cli.selfish, cli.freerider, cli.strategy);
+    cli.assert_consistency();
+    let config = if let Some(peer_config_file) = cli.peer_config_file {
+        let peer_config_contents = fs::read(peer_config_file.clone())
+            .expect(&format!("Could not read file {}", peer_config_file));
+        let peer_config_strings = peer_config_contents.split(|c| *c == b'\n');
+        let peer_config = peer_config_strings
+            .map(|s| PeerConfig::from_string(s))
+            .collect();
+        Config::from_peer_config(cli.chunks, cli.peers, cli.seeds, peer_config)
+    } else {
+        Config::from_counts(
+            cli.chunks,
+            cli.peers,
+            cli.seeds,
+            cli.selfish,
+            cli.freerider,
+            cli.strategy,
+        )
+    };
     let mut distribution = Distribution::new(&config);
     let rounds = if cli.silent {
         distribution.run(cli.random_seed, EmptyRunObserver)
