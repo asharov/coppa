@@ -55,11 +55,9 @@ fn main() {
     cli.assert_consistency();
     let config = if let Some(peer_config_file) = cli.peer_config_file {
         let peer_config_contents = fs::read(peer_config_file.clone())
-            .expect(&format!("Could not read file {}", peer_config_file));
+            .unwrap_or_else(|_| panic!("Could not read file {peer_config_file}"));
         let peer_config_strings = peer_config_contents.split(|c| *c == b'\n');
-        let peer_config = peer_config_strings
-            .map(|s| PeerConfig::from_string(s))
-            .collect();
+        let peer_config = peer_config_strings.map(PeerConfig::from_string).collect();
         Config::from_peer_config(cli.chunks, cli.peers, cli.seeds, peer_config)
     } else {
         Config::from_counts(
@@ -85,8 +83,8 @@ fn main() {
         exchanged_chunks += round.exchanged_chunks;
         execution_time += round.execution_time;
     }
-    println!("");
+    println!();
     println!("Number of rounds {:?}", rounds.len() - 1);
-    println!("Number of chunks exchanged {:?}", exchanged_chunks);
-    println!("Execution time {:?}", execution_time);
+    println!("Number of chunks exchanged {exchanged_chunks:?}");
+    println!("Execution time {execution_time:?}");
 }

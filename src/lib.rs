@@ -87,7 +87,7 @@ pub struct SummaryRunObserver;
 
 impl PeerConfig {
     pub fn from_string(config_string: &[u8]) -> PeerConfig {
-        let selfishness = match config_string.get(0).unwrap_or(&b'a') {
+        let selfishness = match config_string.first().unwrap_or(&b'a') {
             b's' => Selfishness::Selfish,
             b'f' => Selfishness::Freerider,
             _ => Selfishness::Altruistic,
@@ -220,8 +220,8 @@ impl Distribution {
             ))
         }
         Distribution {
-            file: file,
-            peers: peers,
+            file,
+            peers,
             number_seeds: config.number_seeds,
         }
     }
@@ -348,22 +348,19 @@ impl RunObserver for EmptyRunObserver {}
 
 impl RunObserver for DebugRunObserver {
     fn random_seed(&self, seed: u64) {
-        println!("Random seed: {:?}", seed);
+        println!("Random seed: {seed:?}");
     }
     fn round_start(&self, round_number: usize) {
-        println!("Start round {:?}", round_number);
+        println!("Start round {round_number:?}");
     }
     fn chunk_transfer(&self, chunk_number: usize, source_peer: usize, target_peer: usize) {
-        println!(
-            "Transfer chunk {:?} from {:?} to {:?}",
-            chunk_number, source_peer, target_peer
-        );
+        println!("Transfer chunk {chunk_number:?} from {source_peer:?} to {target_peer:?}");
     }
     fn peer_completed(&self, peer: usize) {
-        println!("Peer {:?} completed", peer);
+        println!("Peer {peer:?} completed");
     }
     fn chunk_completed(&self, chunk_number: usize) {
-        println!("Chunk {:?} fully distributed", chunk_number);
+        println!("Chunk {chunk_number:?} fully distributed");
     }
     fn round_end(&self, round_number: usize, round: &Round) {
         println!(
@@ -375,9 +372,9 @@ impl RunObserver for DebugRunObserver {
 
 impl RunObserver for SummaryRunObserver {
     fn random_seed(&self, seed: u64) {
-        println!("Random seed: {:?}", seed);
+        println!("Random seed: {seed:?}");
     }
     fn round_end(&self, round_number: usize, round: &Round) {
-        println!("Round {:?}: {:?}", round_number, round);
+        println!("Round {round_number:?}: {round:?}");
     }
 }
