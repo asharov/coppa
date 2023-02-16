@@ -26,6 +26,15 @@ struct Cli {
     /// Chunk selection strategy that all peers use
     #[arg(long, value_enum, default_value_t = Strategy::RarestFirst)]
     strategy: Strategy,
+    /// The fast network speed
+    #[arg(long)]
+    speed_fast: Option<usize>,
+    /// The medium network speed
+    #[arg(long)]
+    speed_medium: Option<usize>,
+    /// The slow network speed
+    #[arg(long)]
+    speed_slow: Option<usize>,
     /// File containing peer configuration, one peer per line
     #[arg(short = 'F', long)]
     peer_config_file: Option<String>,
@@ -53,17 +62,32 @@ impl Cli {
 fn main() {
     let cli = Cli::parse();
     cli.assert_consistency();
+    let speed_slow = cli.speed_slow.unwrap_or(1);
+    let speed_medium = cli.speed_medium.unwrap_or(speed_slow);
+    let speed_fast = cli.speed_fast.unwrap_or(speed_medium);
     let config = if let Some(peer_config_file) = cli.peer_config_file {
-        let peer_config_contents = fs::read(peer_config_file.clone())
+        let mut peer_config_contents = fs::read(peer_config_file.clone())
             .unwrap_or_else(|_| panic!("Could not read file {peer_config_file}"));
+        peer_config_contents.truncate(peer_config_contents.len() - 1);
         let peer_config_strings = peer_config_contents.split(|c| *c == b'\n');
         let peer_config = peer_config_strings.map(PeerConfig::from_string).collect();
-        Config::from_peer_config(cli.chunks, cli.peers, cli.seeds, peer_config)
+        Config::from_peer_config(
+            cli.chunks,
+            cli.peers,
+            cli.seeds,
+            speed_fast,
+            speed_medium,
+            speed_slow,
+            peer_config,
+        )
     } else {
         Config::from_counts(
             cli.chunks,
             cli.peers,
             cli.seeds,
+            speed_fast,
+            speed_medium,
+            speed_slow,
             cli.selfish,
             cli.freerider,
             cli.strategy,
